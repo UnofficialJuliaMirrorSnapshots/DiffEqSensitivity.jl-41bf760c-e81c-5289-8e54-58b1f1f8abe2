@@ -1,3 +1,10 @@
+Base.@kwdef mutable struct Sobol <: GSAMethod 
+    N::Int=1000
+    order::Array{Int}=[0,1]
+    nboot::Int=0
+    conf_int::Float64=0.95
+end
+
 function give_rand_p!(p_range,p,p_fixed=nothing,indices=nothing)
     if p_fixed === nothing
         for j in 1:length(p_range)
@@ -53,7 +60,7 @@ function first_order_var(f,p_range,N,y0,v,p1,p2,p3)
     ys
 end
 
-function second_order_var(f,p_range,N,y0,v)
+function second_order_var(f,p_range,N,y0,v,p1,p2,p3)
     ys = Array{typeof(y0)}(undef,Int((length(p_range)*(length(p_range)-1))/2))
     curr = 1
     for i in 1:length(p_range)
@@ -62,24 +69,15 @@ function second_order_var(f,p_range,N,y0,v)
             i_arr = [l for l in 1:length(p_range) if l != i]
             j_arr = [l for l in 1:length(p_range) if l != j]
             for k in 1:N
-                p2 = give_rand_p(p_range)
-                p1 = give_rand_p(p_range,p2[i_arr],i_arr)
-                p3 = give_rand_p(p_range,p2[j_arr],j_arr)
-                yer =  (f(p1) .- f(p3)).^2
-                @. y += yer
+                give_rand_p!(p_range,p2)
+                give_rand_p!(p_range,p1,@view(p2[i_arr]),i_arr)
+                give_rand_p!(p_range,p3,@view(p2[j_arr]),j_arr)
+                y .+= (f(p1) .- f(p3)).^2 
             end
-            ys[curr] = copy(y/(2*N))
+            ys[curr] = y/(2*N)
             curr += 1
         end
     end
-    # ys_frst_order = first_order_var(f,p_range,N,y0,v)
-    # j = 1
-    # for i in 1:length(p_range)
-    #     for k in i+1:length(p_range)
-    #         ys[j] = @. ys[j] - ( ys_frst_order[i] + ys_frst_order[k] )
-    #         j += 1
-    #     end
-    # end
     for i in 1:length(ys)
         ys[i] = @. ys[i] / v
     end
@@ -159,7 +157,8 @@ function calc_ci(f,p_range,N,y0,v,nboot,conf_int,sa_func)
     S1_Conf_Int = [[z*std(sample) for sample in el] for el in elems_]
 end
 
-function gsa(f,p_range::AbstractVector,method::Sobol,N::Int64,order=[0,1,2],nboot=100,conf_int=0.95)
+function gsa(f,p_range::AbstractVector,method::Sobol)
+    @unpack N, order, nboot, conf_int = method
     y0,v = calc_mean_var(f,p_range,N)
     p2 = Array{eltype(p_range[1])}(undef, length(p_range))
     p1 = Array{eltype(p_range[1])}(undef, length(p_range))
@@ -189,7 +188,7 @@ function gsa(f,p_range::AbstractVector,method::Sobol,N::Int64,order=[0,1,2],nboo
         end
     end
     if 2 in order
-        second_order = second_order_var(f,p_range,N,y0,v)
+        second_order = second_order_var(f,p_range,N,y0,v,p1,p2,p3)
         sobol_sens.S2 = second_order
         if nboot > 0
             ci = calc_ci(f,p_range,N,y0,v,nboot,conf_int,second_order_var)
@@ -199,11 +198,11 @@ function gsa(f,p_range::AbstractVector,method::Sobol,N::Int64,order=[0,1,2],nboo
     sobol_sens
 end
 
-function gsa(prob::DiffEqBase.DEProblem,alg::DiffEqBase.DEAlgorithm,t,p_range::AbstractVector,method::Sobol,N::Int64,order=[0])
+function gsa(prob::DiffEqBase.DEProblem,alg::DiffEqBase.DEAlgorithm,t,p_range::AbstractVector,method::Sobol)
     f = function (p)
         prob1 = remake(prob;p=p)
         Array(solve(prob1,alg;saveat=t))
     end
     @assert length(prob.p) == length(p_range)
-    gsa(f,p_range,method,N,order)
+    gsa(f,p_range,method)
 end
